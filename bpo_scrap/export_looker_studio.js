@@ -125,8 +125,27 @@ const TAB_FILTERS = {
 };
 
 const CHROME_PROFILE_DIR = path.join(__dirname, 'chrome-profile');
-const EXPORT_DIR = path.join(__dirname, 'exports');
+// CSV exports go to the SHARED handoff folder that insert_inbound_data reads
+// from — no manual copying. Overridable via KPI_SHARED_DIR (the orchestrator
+// sets it); defaults to <repo>/shared, i.e. one level up from bpo_scrap/.
+const EXPORT_DIR = process.env.KPI_SHARED_DIR
+  ? path.resolve(process.env.KPI_SHARED_DIR)
+  : path.join(__dirname, '..', 'shared');
 const DEBUG_DIR = path.join(__dirname, 'debug');
+
+// ------------------------------------------------------------
+// Chrome executable path per OS. Leave a value empty to let Playwright's
+// channel:'chrome' locate the installed Chrome automatically (works on both
+// Linux and Windows). Fill in an explicit path only if that auto-lookup fails
+// on a given machine, e.g.:
+//   windows: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
+//   linux:   '/usr/bin/google-chrome'
+// Selected with --os=windows|linux; defaults to auto-detection.
+// ------------------------------------------------------------
+const CHROME_PATHS = {
+  linux: '',
+  windows: '',
+};
 
 // ------------------------------------------------------------
 // SELECTORS — adjust these if something stops matching.
@@ -205,6 +224,17 @@ const DUMP_ONLY = (ARGV.find(a => a.startsWith('--dump-only=')) || '')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean);
+// Unattended run (e.g. scheduled task): skip the one-time "press Enter" login
+// pause and rely on the persistent chrome-profile session.
+const UNATTENDED = ARGV.includes('--unattended');
+// Explicit OS selector for the Chrome path map; defaults to auto-detection.
+const OS_ARG = (ARGV.find(a => a.startsWith('--os=')) || '').replace('--os=', '').trim();
+
+/** Resolve the effective OS: explicit --os wins, else detect from platform. */
+function resolveOs() {
+  if (OS_ARG === 'windows' || OS_ARG === 'linux') return OS_ARG;
+  return process.platform === 'win32' ? 'windows' : 'linux';
+}
 
 // ============================================================
 // Date helpers
@@ -651,6 +681,7 @@ async function applyTabFilters(page, tabName) {
 async function runExportMode(page) {
   if (!fs.existsSync(EXPORT_DIR)) fs.mkdirSync(EXPORT_DIR, { recursive: true });
 
+  const runStartIso = new Date().toISOString();
   let currentTab = null;   // avoid re-navigating/re-preparing the same tab
   let tabPrepared = false; // date filter + dimension filters applied for this tab
   const results = [];
@@ -702,16 +733,36 @@ async function runExportMode(page) {
       console.log(`   [export] running export flow -> ${entry.outputName}`);
       await exportTable(page, tableHandle, outPath);
       console.log(`   ✅ SUCCESS: ${label} -> ${outPath}`);
-      results.push({ label, ok: true });
+      results.push({ label, ok: true, output: entry.outputName });
     } catch (err) {
       console.log(`   ❌ FAILED: ${label} — ${err.message}`);
-      results.push({ label, ok: false, error: err.message });
+      results.push({ label, ok: false, output: entry.outputName, error: err.message });
     }
     await page.waitForTimeout(1500);
   }
 
   console.log('\n=== Summary ===');
   for (const r of results) console.log(`   ${r.ok ? '✅' : '❌'} ${r.label}${r.ok ? '' : ' — ' + r.error}`);
+
+  // Write the run manifest — the contract the orchestrator's gate reads to
+  // decide whether every expected CSV downloaded before running the sync.
+  const expected = TABLES_TO_EXPORT.map(t => t.outputName);
+  const succeeded = results.filter(r => r.ok).map(r => r.output);
+  const failed = results.filter(r => !r.ok).map(r => r.output);
+  const manifestPath = path.join(EXPORT_DIR, 'manifest.json');
+  fs.writeFileSync(
+    manifestPath,
+    JSON.stringify({ runAt: runStartIso, expected, succeeded, failed }, null, 2),
+    'utf8'
+  );
+  console.log(`\n[manifest] wrote ${manifestPath}`);
+  console.log(`[manifest] expected ${expected.length}, succeeded ${succeeded.length}, failed ${failed.length}`);
+
+  // Signal partial/total failure to the orchestrator via a non-zero exit code.
+  if (failed.length > 0) {
+    process.exitCode = 1;
+    console.log('[exit] one or more tables failed — exit code 1');
+  }
 }
 
 // ============================================================
@@ -719,20 +770,40 @@ async function runExportMode(page) {
 // ============================================================
 
 async function main() {
-  const context = await chromium.launchPersistentContext(CHROME_PROFILE_DIR, {
-    channel: 'chrome',       // use real installed Chrome, not bundled Chromium
+  const os = resolveOs();
+  const chromePath = CHROME_PATHS[os];
+  const launchOpts = {
     headless: false,         // keep visible — needed for manual login/2FA
     acceptDownloads: true,
     args: ['--disable-blink-features=AutomationControlled'],
-  });
+  };
+  // Use an explicit Chrome path when one is configured for this OS; otherwise
+  // let Playwright locate the installed Chrome via the 'chrome' channel.
+  if (chromePath) {
+    launchOpts.executablePath = chromePath;
+  } else {
+    launchOpts.channel = 'chrome';
+  }
+  console.log(`>> OS: ${os}${chromePath ? ` (chrome: ${chromePath})` : " (channel 'chrome')"}`);
+
+  const context = await chromium.launchPersistentContext(CHROME_PROFILE_DIR, launchOpts);
 
   const page = context.pages()[0] || (await context.newPage());
   const firstUrl = REPORT_PAGES[0].url;
 
   await page.goto(firstUrl).catch(() => {});
-  console.log('>> If this is the first run, log into Google in the window that opened.');
-  console.log('>> Once the report is visible and loaded, come back here and press Enter.');
-  await waitForEnter();
+
+  // Unattended mode (flag) or no interactive terminal (scheduled task): don't
+  // block on Enter — the persistent chrome-profile already carries the logged-in
+  // Google session. Otherwise pause for the one-time manual login.
+  if (UNATTENDED || !process.stdin.isTTY) {
+    console.log('>> Unattended: using saved chrome-profile session, skipping login prompt.');
+    await page.waitForTimeout(6000); // let the first report settle before work
+  } else {
+    console.log('>> If this is the first run, log into Google in the window that opened.');
+    console.log('>> Once the report is visible and loaded, come back here and press Enter.');
+    await waitForEnter();
+  }
 
   if (DUMP_HTML) {
     await runDumpMode(page);

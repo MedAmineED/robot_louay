@@ -7,6 +7,16 @@ const projectRoot = path.resolve(__dirname, '..');
 /** Absolute path helper relative to the project root. */
 const fromRoot = (...parts) => path.join(projectRoot, ...parts);
 
+// Shared handoff folder written by the scraper (bpo_scrap). No manual copying:
+// the CSVs are read straight from here. Overridable via KPI_SHARED_DIR (the
+// orchestrator sets it); defaults to <repo>/shared, one level up from this project.
+const sharedDir = process.env.KPI_SHARED_DIR
+  ? path.resolve(process.env.KPI_SHARED_DIR)
+  : path.join(projectRoot, '..', 'shared');
+
+/** Absolute path helper relative to the shared handoff folder. */
+const fromShared = (...parts) => path.join(sharedDir, ...parts);
+
 export const config = {
   // Google Sheet target.
   spreadsheetId: '12NncDaUkv19J51JCXYLD7Iw9-a7AZ3wi-y_SPnHGNXU',
@@ -15,11 +25,12 @@ export const config = {
   // Service-account credentials shared with the sheet.
   credentialsPath: fromRoot('gen-lang-client-0853188287-4ba6689de090.json'),
 
-  // Logical name -> CSV file. Referenced by columnMapping.js via these keys.
+  // Logical name -> CSV file, read from the shared handoff folder.
+  // Referenced by columnMapping.js via these keys.
   sources: {
-    quick_look: fromRoot('quick_look__experts_point_of_view.csv'),
-    others_focus: fromRoot('deep_dive__others_focus__your_point_of_view_experts.csv'),
-    production: fromRoot('table_view__production.csv'),
+    quick_look: fromShared('quick_look__experts_point_of_view.csv'),
+    others_focus: fromShared('deep_dive__others_focus__your_point_of_view_experts.csv'),
+    production: fromShared('table_view__production.csv'),
   },
 
   // Column holding the agent identifier in every source file and in the sheet.
