@@ -1,0 +1,13 @@
+{
+  "name": "insert-inbound-data",
+  "version": "1.0.0",
+  "description": "Aggregate agent inbound KPI data from CSV exports and sync it to Google Sheets.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "sync": "node src/index.js"
+  },
+  "dependencies": {
+    "googleapis": "^144.0.0"
+  }
+}
