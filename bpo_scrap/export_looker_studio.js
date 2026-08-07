@@ -775,7 +775,12 @@ async function main() {
   const launchOpts = {
     headless: false,         // keep visible — needed for manual login/2FA
     acceptDownloads: true,
-    args: ['--disable-blink-features=AutomationControlled'],
+    // Force English so the date-picker labels ("JUL 2026", "1 Jul 2026") match
+    // the English month names the date logic expects. On a French-locale machine
+    // the picker renders "juil." etc. and date selection fails. `locale` sets
+    // Accept-Language + JS locale; `--lang` sets Chrome's own UI language.
+    locale: 'en-US',
+    args: ['--disable-blink-features=AutomationControlled', '--lang=en-US'],
   };
   // Use an explicit Chrome path when one is configured for this OS; otherwise
   // let Playwright locate the installed Chrome via the 'chrome' channel.
