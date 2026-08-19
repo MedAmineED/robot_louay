@@ -77,7 +77,7 @@ const TABLES_TO_EXPORT = [
     outputName: "quick_look__experts_point_of_view.csv",
     // Extra metric columns to enable via the table's "Optional metrics" button
     // before exporting. Add more names to this array to include more columns.
-    optionalMetrics: ["SPH_R_Profitability"],
+    optionalMetrics: ["SPH_R_Profitability", "% HS_R Over NRJ_C"],
   },
   {
     tab: "table_view",
