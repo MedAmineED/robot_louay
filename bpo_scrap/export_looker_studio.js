@@ -165,16 +165,20 @@ const SELECTORS = {
   // The per-table "⋮" icon revealed on hover: aria-label "Show chart menu"
   // (tooltip "More"). Confirmed via live DOM inspection — NOT the report-level
   // "More report actions" kebab. Keep the fallbacks in case markup shifts.
-  moreMenuButton: '[aria-label="Show chart menu"], .ng2-chart-menu-button, [aria-label="More options"], button[mattooltip="More"]',
+  moreMenuButton: '[aria-label="Show chart menu"], [aria-label="Afficher le menu du graphique"], .ng2-chart-menu-button, [aria-label="More options"], button[mattooltip="More"]',
   // The per-table "Optional metrics" button (adds/removes metric columns) and
   // the checkbox menu it opens (mat-checkbox items in a cdk overlay).
-  optionalMetricsButton: '[aria-label="Optional metrics"], .metric-selector-button',
+  optionalMetricsButton: '[aria-label="Optional metrics"], [aria-label="Métriques facultatives"], .metric-selector-button',
   optionalMetricsCheckbox: '.cdk-overlay-container mat-checkbox',
   // The chart menu is: "Export chart..." (a submenu) -> "Export data" -> dialog.
   // These are the menu items in the CDK overlay after opening the kebab.
   menuItem: '.cdk-overlay-container [role="menuitem"], .cdk-overlay-container .mat-mdc-menu-item',
-  exportSubmenuTrigger: 'Export chart', // hasText for the "Export chart..." submenu
-  exportDataItem: 'Export data',        // hasText for the CSV export entry in the submenu
+  // hasText matchers for the export submenu/entry. Bilingual (EN + FR) so they
+  // work whether the Looker UI is English or French — the UI language follows
+  // the Google account, not the browser. The FR data-export label is specific
+  // enough not to collide with "Afficher la demande de données".
+  exportSubmenuTrigger: /Export chart|Exporter le graphique/i, // "Export chart..." submenu
+  exportDataItem: /Export data|Exporter les données/i,         // CSV export entry in the submenu
   // The "Export data" modal (Name field, CSV radio, Export button).
   exportDialog: '[role="dialog"], mat-dialog-container',
   // The blue "Export" confirm button INSIDE that modal.
@@ -192,29 +196,65 @@ const SELECTORS = {
   calendarPeriodButton: '.mat-calendar-period-button',
   calendarPrevButton: '.mat-calendar-previous-button',
   calendarNextButton: '.mat-calendar-next-button',
-  // Apply/Cancel in the picker overlay.
-  pickerApplyButton: '.cdk-overlay-container button:has-text("Apply")',
+  // Apply/Cancel in the picker overlay. The button label is localized, so match
+  // both English ("Apply") and French ("Appliquer").
+  pickerApplyButton: '.cdk-overlay-container button:has-text("Apply"), .cdk-overlay-container button:has-text("Appliquer")',
 
   // --- Dimension-filter (drop-down list) controls + their panel ---
   // Each drop-down filter control on the canvas. Its visible text is like
   // "agent_team ▼" or "aggregate (high level): Inbound Energy (1) ▼".
   dimensionFilter: '.lego-component.dimension-filter',
   // The filter panel is an AngularJS-Material list (md-*), NOT a cdk overlay.
-  filterSearchInput: 'input[aria-label="Type to search"], input[placeholder="Type to search"]',
+  filterSearchInput: 'input[aria-label="Type to search"], input[placeholder="Type to search"], input[aria-label="Saisir un terme à rechercher"], input[placeholder="Saisir un terme à rechercher"]',
   // One row per value; contains an md-checkbox and a "only" quick-select link.
   filterOptionRow: '.item',
   filterOnlyLink: '.only', // "select only this value" link inside a row
 };
 
-// Month labels used to (a) build day cell aria-labels ("1 Jul 2026") and
-// (b) match the calendar header ("JUL 2026").
+// Month labels for readable log lines only (English).
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-// A day cell's aria-label, e.g. "1 Jul 2026" (no leading zero, capitalized month).
+// A short day label for logs, e.g. "1 Jul 2026".
 const fmtDayAria = (d) => `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]} ${d.getFullYear()}`;
-// The calendar header label, e.g. "JUL 2026".
-const fmtMonthHeader = (d) => `${MONTHS_SHORT[d.getMonth()].toUpperCase()} ${d.getFullYear()}`;
 // Comparable month index for navigation direction.
 const monthIndex = (year, month0) => year * 12 + month0;
+
+// ------------------------------------------------------------
+// The date picker's UI language follows the Google ACCOUNT, not the browser —
+// so on some accounts the calendar renders in French ("JUIL. 2026",
+// "1 juillet 2026"). To stay language-independent we (a) map localized month
+// labels to a month index for header navigation, and (b) click day cells by
+// their NUMBER, never by a localized aria-label string.
+// ------------------------------------------------------------
+// Normalize a month token: uppercase, strip accents and trailing dots.
+const normMonth = (s) =>
+  String(s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\./g, '').trim();
+const MONTH_ALIASES = {};
+{
+  const add = (idx, names) => names.forEach((n) => { MONTH_ALIASES[normMonth(n)] = idx; });
+  add(0,  ['Jan', 'January', 'janv', 'janvier']);
+  add(1,  ['Feb', 'February', 'févr', 'février']);
+  add(2,  ['Mar', 'March', 'mars']);
+  add(3,  ['Apr', 'April', 'avr', 'avril']);
+  add(4,  ['May', 'mai']);
+  add(5,  ['Jun', 'June', 'juin']);
+  add(6,  ['Jul', 'July', 'juil', 'juillet']);
+  add(7,  ['Aug', 'August', 'août', 'aout']);
+  add(8,  ['Sep', 'Sept', 'September', 'septembre']);
+  add(9,  ['Oct', 'October', 'octobre']);
+  add(10, ['Nov', 'November', 'novembre']);
+  add(11, ['Dec', 'December', 'déc', 'décembre']);
+}
+// Parse a calendar header like "JUL 2026" / "JUIL. 2026" -> { year, month } (or nulls).
+function parseMonthHeader(headerText) {
+  const yearMatch = String(headerText).match(/\d{4}/);
+  const year = yearMatch ? parseInt(yearMatch[0], 10) : null;
+  let month = null;
+  for (const tok of String(headerText).replace(/\d{4}/, '').split(/\s+/)) {
+    const key = normMonth(tok);
+    if (key && key in MONTH_ALIASES) { month = MONTH_ALIASES[key]; break; }
+  }
+  return { year, month };
+}
 
 // Parse minimal CLI flags.
 const ARGV = process.argv.slice(2);
@@ -308,18 +348,29 @@ async function selectDayInCalendar(page, calendarSelector, targetDate) {
   const targetIdx = monthIndex(targetDate.getFullYear(), targetDate.getMonth());
 
   for (let guard = 0; guard < 24; guard++) {
-    const header = (await calendar.locator(SELECTORS.calendarPeriodButton).first().innerText()).trim().toUpperCase();
-    if (header === fmtMonthHeader(targetDate)) break;
-    // Parse the shown "MON YYYY" header to decide direction.
-    const [monStr, yrStr] = header.split(/\s+/);
-    const shownIdx = monthIndex(parseInt(yrStr, 10), MONTHS_SHORT.findIndex(m => m.toUpperCase() === monStr));
+    const header = (await calendar.locator(SELECTORS.calendarPeriodButton).first().innerText()).trim();
+    // Parse the shown header in a language-independent way (year digits + a
+    // month lookup that understands English and French labels).
+    const { year, month } = parseMonthHeader(header);
+    if (year == null || month == null) {
+      // Unrecognized header — nudge one month and retry rather than crash.
+      await calendar.locator(SELECTORS.calendarNextButton).first().click().catch(() => {});
+      await page.waitForTimeout(300);
+      continue;
+    }
+    const shownIdx = monthIndex(year, month);
+    if (shownIdx === targetIdx) break;
     const arrow = targetIdx < shownIdx ? SELECTORS.calendarPrevButton : SELECTORS.calendarNextButton;
     await calendar.locator(arrow).first().click();
     await page.waitForTimeout(300);
   }
 
-  // Day cells are buttons with aria-label like "1 Jul 2026".
-  await calendar.locator(`button[aria-label="${fmtDayAria(targetDate)}"]`).first().click();
+  // Click the day by its NUMBER — language-independent. The month view shows
+  // only the current month's days, and day-cell aria-labels are day-first in
+  // every locale we target ("1 Jul 2026" / "1 juillet 2026"), so a "<day> "
+  // prefix uniquely identifies the cell.
+  const day = String(targetDate.getDate());
+  await calendar.locator(`button[aria-label^="${day} "]`).first().click();
   await page.waitForTimeout(300);
 }
 
@@ -353,11 +404,18 @@ async function setDateFilterToMonthToDateMinusOne(page) {
   await page.waitForTimeout(4000); // let charts re-query with the new range
 
   const labelAfter = (await control.innerText()).replace(/\s+/g, ' ').trim();
-  const wantStart = fmtDayAria(start), wantEnd = fmtDayAria(end);
-  const applied = labelAfter.includes(wantStart) && labelAfter.includes(wantEnd);
+  // The control label is localized too, so verify by day numbers + year rather
+  // than by English month names: the label must have changed and contain both
+  // day-of-month numbers and the year.
+  const hasNum = (n) => new RegExp(`(^|\\D)${n}(\\D|$)`).test(labelAfter);
+  const applied =
+    labelAfter !== labelBefore &&
+    hasNum(start.getDate()) &&
+    hasNum(end.getDate()) &&
+    labelAfter.includes(String(end.getFullYear()));
   console.log(`   [date] label: "${labelBefore}" -> "${labelAfter}"`);
   if (!applied) {
-    throw new Error(`date filter did not apply (label still "${labelAfter}", expected to contain "${wantStart}" and "${wantEnd}")`);
+    throw new Error(`date filter did not apply (label still "${labelAfter}", expected day ${start.getDate()} and ${end.getDate()} of ${end.getFullYear()})`);
   }
 }
 
