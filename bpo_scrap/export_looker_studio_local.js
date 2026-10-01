@@ -281,14 +281,12 @@ function resolveOs() {
 // ============================================================
 
 /**
- * Returns { start, end } Date objects for [1st of yesterday's month, yesterday].
+ * Returns { start, end } Date objects for [1st of current month, yesterday].
  * Computed at runtime so the range is always correct on any future run.
- * On the 1st of a month this yields the whole previous month (e.g. on 1 Oct:
- * 1 Sep -> 30 Sep); the current month is only used from the 2nd onwards.
  */
 function getMonthToDateMinusOneRange(now = new Date()) {
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
   const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-  const start = new Date(end.getFullYear(), end.getMonth(), 1);
   return { start, end };
 }
 

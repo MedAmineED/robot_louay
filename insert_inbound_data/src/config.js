@@ -19,8 +19,8 @@ const fromShared = (...parts) => path.join(sharedDir, ...parts);
 
 export const config = {
   // Google Sheet target.
-  spreadsheetId: '12NncDaUkv19J51JCXYLD7Iw9-a7AZ3wi-y_SPnHGNXU',
-  tabName: 'inbound_kpi',
+  spreadsheetId: '13J2l1iPjz1Rf0lVSq36NHLVJ3GtknnK-V4JbJk7dLIo',
+  tabName: 'KPI_Inbound_test',
 
   // Service-account credentials shared with the sheet.
   credentialsPath: fromRoot('gen-lang-client-0853188287-4ba6689de090.json'),

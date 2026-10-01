@@ -2,10 +2,17 @@ import { config } from './config.js';
 import { columnMapping } from './columnMapping.js';
 import { canonicalAgent, normalizeAgent } from './sources.js';
 
-/** Parse a raw CSV cell to a number; non-numeric cells ("-", "") count as 0. */
+/** Parse a raw CSV cell to a numeric fraction; handles "26,09%", "0.2609", "-", etc. */
 function toNumber(cell) {
-  const value = Number(String(cell ?? '').trim());
-  return Number.isFinite(value) ? value : 0;
+  const str = String(cell ?? '').trim();
+  if (!str || str === '-') return 0;
+
+  const isPercent = str.endsWith('%');
+  const cleanStr = isPercent ? str.slice(0, -1) : str;
+  const num = Number(cleanStr.replace(',', '.'));
+
+  if (!Number.isFinite(num)) return 0;
+  return isPercent ? num / 100 : num;
 }
 
 /** Union of every agent seen across all sources, sorted A -> Z (case-insensitive). */
@@ -31,10 +38,37 @@ function resolveCell(header, agent, sources) {
   const row = sources.get(rule.source)?.get(agent);
   if (!row) return { value: config.missingValue };
 
-  if (rule.compute) return { value: rule.compute(row, { toNumber }) };
+  let raw;
+  if (rule.compute) {
+    raw = rule.compute(row, { toNumber });
+  } else {
+    raw = row[rule.field];
+    if (raw === undefined || raw === '') return { value: config.missingValue };
+  }
 
-  const raw = row[rule.field];
-  return { value: raw === undefined || raw === '' ? config.missingValue : raw };
+  if (raw === config.missingValue || raw === '-') return { value: config.missingValue };
+
+  let parsedValue;
+
+  if (rule.format === 'percent') {
+    const parsed = toNumber(raw);
+    // Round consistently to 4 decimal places (e.g. 0.2609)
+    parsedValue = Math.round(parsed * 10000) / 10000;
+  } else {
+    // Attempt to parse other numeric columns
+    const str = String(raw).trim();
+    const asNum = Number(str.replace(',', '.'));
+    if (str !== '' && Number.isFinite(asNum)) {
+      // Round to at most 2 decimals (0.673076… -> 0.67, 46 -> 46, 24.5 -> 24.5) and
+      // use a comma decimal separator so Sheets (FR locale) doesn't read "1.5" as May 1st.
+      const rounded = Math.round(asNum * 100) / 100;
+      parsedValue = String(rounded).replace('.', ',');
+    } else {
+      parsedValue = raw;
+    }
+  }
+
+  return { value: parsedValue };
 }
 
 /**

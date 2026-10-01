@@ -38,12 +38,14 @@ export const columnMapping = {
   '% Comm. Position': { source: 'quick_look', field: '% Comm. Position', format: 'percent' },
   '% Coach Callbacks': { source: 'quick_look', field: '% Coach Callbacks', format: 'percent' },
   'SPH_R_Profitability': { source: 'quick_look', field: 'SPH_R_Profitability' },
+    '% Voltalis_R': { source: 'quick_look', field: '% Voltalis_R', format: 'percent'  },
+
   // Sheet's "% HS_R" is fed from the CSV's "% HS_R Over NRJ_C" metric (an
   // optional metric enabled on the Experts Point of View table). Sheet column
   // name stays "% HS_R"; only the source field changes.
   '% HS_R': { source: 'quick_look', field: '% HS_R Over NRJ_C', format: 'percent' },
 
-  '% Carbon_Comp_NRJ_R': { source: 'others_focus', field: '% Carbon_Comp_NRJ_R', format: 'percent' },
+  '% Carbon_Comp_NRJ': { source: 'quick_look', field: '% Carbon_Comp_NRJ_C', format: 'percent' },
   '% Proxiserve_R': { source: 'others_focus', field: '% Proxiserve_R', format: 'percent' },
 
   '%Training': { source: 'production', field: '% Train', format: 'percent' },
