@@ -256,6 +256,32 @@ function parseMonthHeader(headerText) {
   return { year, month };
 }
 
+// Parse one side of a date-control label, e.g. "1 oct. 2026" / "Oct 1, 2026"
+// -> { year, month, day } (fields null when not found).
+function parseLabelDate(text) {
+  const yearMatch = String(text).match(/\d{4}/);
+  const year = yearMatch ? parseInt(yearMatch[0], 10) : null;
+  const rest = String(text).replace(/\d{4}/, '');
+  const dayMatch = rest.match(/(^|\D)(\d{1,2})(\D|$)/);
+  const day = dayMatch ? parseInt(dayMatch[2], 10) : null;
+  let month = null;
+  for (const tok of rest.split(/[\s,]+/)) {
+    const key = normMonth(tok);
+    if (key && key in MONTH_ALIASES) { month = MONTH_ALIASES[key]; break; }
+  }
+  return { year, month, day };
+}
+
+// True when a date-control label ("1 oct. 2026 - 1 oct. 2026 arrow_drop_down")
+// shows exactly [start, end]. Language-independent via MONTH_ALIASES.
+function labelMatchesRange(label, start, end) {
+  const parts = String(label).replace(/arrow_drop_down/g, '').split(/\s[-–]\s/);
+  if (parts.length !== 2) return false;
+  const same = (p, d) =>
+    p.year === d.getFullYear() && p.month === d.getMonth() && p.day === d.getDate();
+  return same(parseLabelDate(parts[0]), start) && same(parseLabelDate(parts[1]), end);
+}
+
 // Parse minimal CLI flags.
 const ARGV = process.argv.slice(2);
 const DUMP_HTML = ARGV.includes('--dump-html');
@@ -393,6 +419,12 @@ async function setDateFilterToMonthToDateMinusOne(page) {
 
   const control = await pickMainDateControl(page);
   const labelBefore = (await control.innerText()).replace(/\s+/g, ' ').trim();
+  // On the 2nd of the month the target (1st -> 1st) equals the report's default
+  // "Yesterday" period, so the filter is already correct — nothing to change.
+  if (labelMatchesRange(labelBefore, start, end)) {
+    console.log(`   [date] label already "${labelBefore}" — filter already set, skipping picker`);
+    return;
+  }
   await control.scrollIntoViewIfNeeded();
   await control.click();
 
@@ -406,15 +438,9 @@ async function setDateFilterToMonthToDateMinusOne(page) {
   await page.waitForTimeout(4000); // let charts re-query with the new range
 
   const labelAfter = (await control.innerText()).replace(/\s+/g, ' ').trim();
-  // The control label is localized too, so verify by day numbers + year rather
-  // than by English month names: the label must have changed and contain both
-  // day-of-month numbers and the year.
-  const hasNum = (n) => new RegExp(`(^|\\D)${n}(\\D|$)`).test(labelAfter);
-  const applied =
-    labelAfter !== labelBefore &&
-    hasNum(start.getDate()) &&
-    hasNum(end.getDate()) &&
-    labelAfter.includes(String(end.getFullYear()));
+  // The control label is localized, so verify by parsing day/month/year on
+  // both sides of the range (English and French month names understood).
+  const applied = labelMatchesRange(labelAfter, start, end);
   console.log(`   [date] label: "${labelBefore}" -> "${labelAfter}"`);
   if (!applied) {
     throw new Error(`date filter did not apply (label still "${labelAfter}", expected day ${start.getDate()} and ${end.getDate()} of ${end.getFullYear()})`);
