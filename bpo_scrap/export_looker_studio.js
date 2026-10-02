@@ -579,6 +579,52 @@ async function addOptionalMetrics(page, tableTile, metrics) {
   await page.waitForTimeout(1500); // let the table re-render with the new column(s)
 }
 
+/**
+ * Runs in every page before Looker's own code (context.addInitScript).
+ * Remembers each Blob turned into an object URL, and swallows clicks on
+ * <a download href="blob:..."> — storing the blob bytes (base64) in
+ * window.__capturedDownloads instead of letting Chrome download the file.
+ * Covers a.click(), dispatchEvent(click) and real clicks.
+ */
+function CAPTURE_DOWNLOADS_INIT() {
+  const blobs = new Map();
+  const origCreate = URL.createObjectURL;
+  URL.createObjectURL = function (obj) {
+    const url = origCreate.apply(this, arguments);
+    if (obj instanceof Blob) blobs.set(url, obj);
+    return url;
+  };
+  window.__capturedDownloads = [];
+  const grab = (a) => {
+    const href = a.href || '';
+    if (!a.hasAttribute('download') || !href.startsWith('blob:')) return false;
+    const blob = blobs.get(href); // survives an immediate revokeObjectURL()
+    const p = blob ? Promise.resolve(blob) : fetch(href).then((r) => r.blob());
+    p.then((b) => b.arrayBuffer()).then((buf) => {
+      let bin = '';
+      const bytes = new Uint8Array(buf);
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      }
+      window.__capturedDownloads.push({ name: a.getAttribute('download'), base64: btoa(bin) });
+    }).catch((e) => window.__capturedDownloads.push({ error: String(e) }));
+    return true;
+  };
+  const origClick = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function () {
+    if (!grab(this)) return origClick.apply(this, arguments);
+  };
+  const origDispatch = EventTarget.prototype.dispatchEvent;
+  EventTarget.prototype.dispatchEvent = function (ev) {
+    if (ev && ev.type === 'click' && this instanceof HTMLAnchorElement && grab(this)) return false;
+    return origDispatch.apply(this, arguments);
+  };
+  document.addEventListener('click', (ev) => {
+    const a = ev.target && ev.target.closest && ev.target.closest('a');
+    if (a && ev.isTrusted && grab(a)) ev.preventDefault();
+  }, true);
+}
+
 async function exportTable(page, tableTile, outputPath) {
   await tableTile.scrollIntoViewIfNeeded();
   await tableTile.hover(); // reveals the "⋮" chart-menu icon
@@ -606,13 +652,17 @@ async function exportTable(page, tableTile, outputPath) {
     .filter({ hasText: /^CSV$/ }).first();
   if (await csvRadio.count()) await csvRadio.click().catch(() => {});
 
+  // Looker builds the CSV in-page as a blob and "clicks" a download link.
+  // CAPTURE_DOWNLOADS_INIT intercepts that click and keeps the bytes, so we
+  // write the file ourselves and never go through Chrome's download manager
+  // (which crashes the browser on this machine since the late-Sept updates).
+  await page.evaluate(() => { window.__capturedDownloads = []; });
   const confirmButton = dialog.locator(SELECTORS.exportDialogConfirmButton).last();
-  const [download] = await Promise.all([
-    page.waitForEvent('download', { timeout: 25000 }),
-    confirmButton.click(),
-  ]);
-
-  await download.saveAs(outputPath);
+  await confirmButton.click();
+  await page.waitForFunction(() => window.__capturedDownloads.length > 0, null, { timeout: 25000 });
+  const [captured] = await page.evaluate(() => window.__capturedDownloads);
+  if (captured.error) throw new Error(`could not read exported CSV: ${captured.error}`);
+  fs.writeFileSync(outputPath, Buffer.from(captured.base64, 'base64'));
 
   // Make sure the modal is dismissed before the next table.
   await dismissOverlays(page);
@@ -824,6 +874,16 @@ async function runExportMode(page) {
       console.log(`   ❌ FAILED: ${label} — ${err.message}`);
       results.push({ label, ok: false, output: entry.outputName, error: err.message });
     }
+    // If the browser died, every remaining table would fail the same way —
+    // stop here so the summary and manifest still get written.
+    if (page.isClosed()) {
+      console.log('   ❌ browser closed — skipping remaining tables');
+      for (const rest of TABLES_TO_EXPORT.slice(results.length)) {
+        const restLabel = `[${rest.tab}]${rest.section ? ' › ' + rest.section : ''} › "${rest.tableTitle}"`;
+        results.push({ label: restLabel, ok: false, output: rest.outputName, error: 'browser closed' });
+      }
+      break;
+    }
     await page.waitForTimeout(1500);
   }
 
@@ -878,6 +938,7 @@ async function main() {
   console.log(`>> OS: ${os}${chromePath ? ` (chrome: ${chromePath})` : " (channel 'chrome')"}`);
 
   const context = await chromium.launchPersistentContext(CHROME_PROFILE_DIR, launchOpts);
+  await context.addInitScript(CAPTURE_DOWNLOADS_INIT);
 
   const page = context.pages()[0] || (await context.newPage());
   const firstUrl = REPORT_PAGES[0].url;
